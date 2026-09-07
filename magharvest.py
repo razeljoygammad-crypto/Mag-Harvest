@@ -42,10 +42,10 @@ OWNER_USER_IDS = {
 }
 
 # Allowed category
-ALLOWED_CATEGORY_ID = 1467004864272793724
+ALLOWED_CATEGORY_ID = 1401449789983428719
 
 # Farm channel
-CHANNEL_ID = 1491725404501708810
+CHANNEL_ID = 1401449829095182437
 
 
 # =========================================================
