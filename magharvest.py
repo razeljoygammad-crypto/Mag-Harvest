@@ -73,7 +73,7 @@ SCIENCE_ROLE_IDS = {
 TACKLE_TIME = 48 * 60 * 60
 
 # Science = 10 hours
-SCIENCE_TIME = 10 * 60 * 60
+SCIENCE_TIME = 12 * 60 * 60
 
 
 # =========================================================
@@ -508,7 +508,7 @@ def science_embed():
         )
 
     description += (
-        "\n⏱️ Harvest timer: **10 hours**"
+        "\n⏱️ Harvest timer: **12 hours**"
     )
 
     embed.description = description
@@ -1281,7 +1281,7 @@ async def status(ctx):
         )
 
     embed.add_field(
-        name="🔬 Science Station — 10 Hours",
+        name="🔬 Science Station — 12 Hours",
         value=science_text,
         inline=False
     )
@@ -1372,7 +1372,7 @@ async def on_ready():
     )
 
     print(
-        "🔬 Science: 2 worlds / 10 hours"
+        "🔬 Science: 2 worlds / 12 hours"
     )
 
     print(
