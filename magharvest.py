@@ -1,3 +1,4 @@
+```python
 import discord
 from discord.ext import commands, tasks
 import os
@@ -13,6 +14,7 @@ import asyncio
 
 app = Flask(__name__)
 
+
 @app.route("/")
 def home():
     return "Farm Bot is online!"
@@ -20,6 +22,7 @@ def home():
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
+
     app.run(
         host="0.0.0.0",
         port=port
@@ -31,20 +34,18 @@ def keep_alive():
     thread.daemon = True
     thread.start()
 
+
 # =========================================================
 # CONFIGURATION
 # =========================================================
 
-# Only these users can use !setup and !status
 OWNER_USER_IDS = {
     923096413934616596,
     760023911764197396,
 }
 
-# Allowed category
 ALLOWED_CATEGORY_ID = 1401449789983428719
 
-# Farm channel
 CHANNEL_ID = 1546817067464917022
 
 
@@ -52,13 +53,11 @@ CHANNEL_ID = 1546817067464917022
 # ROLES
 # =========================================================
 
-# Roles that will be pinged for TACKLE
 TACKLE_ROLE_IDS = {
     1401454637877297253,
     1401455558514577489,
 }
 
-# Roles that will be pinged for SCIENCE
 SCIENCE_ROLE_IDS = {
     1401454637877297253,
     1401455558514577489,
@@ -69,10 +68,8 @@ SCIENCE_ROLE_IDS = {
 # TIMER SETTINGS
 # =========================================================
 
-# Tackle = 48 hours
 TACKLE_TIME = 48 * 60 * 60
 
-# Science = 10 hours
 SCIENCE_TIME = 12 * 60 * 60
 
 
@@ -109,18 +106,12 @@ def get_db():
 
 
 def initialize_database():
-    """
-    Creates the database if it doesn't exist.
-
-    Also automatically upgrades an old database
-    by adding panel_message_id if necessary.
-    """
 
     db = get_db()
     cursor = db.cursor()
 
     # -----------------------------------------------------
-    # Create table if it doesn't exist
+    # FARM TABLE
     # -----------------------------------------------------
 
     cursor.execute("""
@@ -134,37 +125,31 @@ def initialize_database():
     """)
 
     # -----------------------------------------------------
-    # CHECK EXISTING COLUMNS
+    # CHECK COLUMNS
     # -----------------------------------------------------
 
     cursor.execute("PRAGMA table_info(farms)")
+
     columns = {
         row[1]
         for row in cursor.fetchall()
     }
 
     # -----------------------------------------------------
-    # AUTO-MIGRATE OLD DATABASE
+    # ADD PANEL MESSAGE ID IF OLD DATABASE
     # -----------------------------------------------------
 
     if "panel_message_id" not in columns:
 
-        print(
-            "⚠️ Old database detected."
-        )
-
-        print(
-            "🔧 Adding panel_message_id column..."
-        )
+        print("⚠️ Old database detected.")
+        print("🔧 Adding panel_message_id column...")
 
         cursor.execute("""
             ALTER TABLE farms
             ADD COLUMN panel_message_id INTEGER
         """)
 
-        print(
-            "✅ Database upgraded successfully."
-        )
+        print("✅ Database upgraded successfully.")
 
     # -----------------------------------------------------
     # ADD TACKLE WORLDS
@@ -214,11 +199,34 @@ def initialize_database():
             )
         """, (world,))
 
+    # -----------------------------------------------------
+    # PING TABLE
+    #
+    # This stores the ONE active harvest ping.
+    # -----------------------------------------------------
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS active_ping (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            message_id INTEGER
+        )
+    """)
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO active_ping
+        (id, message_id)
+        VALUES (1, NULL)
+    """)
+
     db.commit()
     db.close()
 
     print("✅ Database initialized.")
 
+
+# =========================================================
+# FARM DATABASE FUNCTIONS
+# =========================================================
 
 def get_farm(world):
 
@@ -302,6 +310,61 @@ def update_farm(
 
 
 # =========================================================
+# ACTIVE PING DATABASE
+# =========================================================
+
+def get_active_ping_id():
+
+    db = get_db()
+    cursor = db.cursor()
+
+    cursor.execute("""
+        SELECT message_id
+        FROM active_ping
+        WHERE id = 1
+    """)
+
+    row = cursor.fetchone()
+
+    db.close()
+
+    if row is None:
+        return None
+
+    return row[0]
+
+
+def set_active_ping_id(message_id):
+
+    db = get_db()
+    cursor = db.cursor()
+
+    cursor.execute("""
+        UPDATE active_ping
+        SET message_id = ?
+        WHERE id = 1
+    """, (message_id,))
+
+    db.commit()
+    db.close()
+
+
+def clear_active_ping_id():
+
+    db = get_db()
+    cursor = db.cursor()
+
+    cursor.execute("""
+        UPDATE active_ping
+        SET message_id = NULL
+        WHERE id = 1
+    """)
+
+    db.commit()
+    db.close()
+
+
+# =========================================================
 # DISCORD BOT
 # =========================================================
 
@@ -324,6 +387,7 @@ farm_lock = asyncio.Lock()
 # =========================================================
 
 def is_owner(user_id):
+
     return user_id in OWNER_USER_IDS
 
 
@@ -607,6 +671,64 @@ class ScienceView(discord.ui.View):
 
 
 # =========================================================
+# DISMISS PING VIEW
+# =========================================================
+
+class DismissPingView(discord.ui.View):
+
+    def __init__(self):
+
+        super().__init__(
+            timeout=None
+        )
+
+    @discord.ui.button(
+        label="Dismiss",
+        emoji="🔕",
+        style=discord.ButtonStyle.secondary,
+        custom_id="dismiss_harvest_ping"
+    )
+    async def dismiss(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        try:
+
+            await interaction.message.delete()
+
+            # Only clear the database if this
+            # is the currently stored ping.
+            current_id = get_active_ping_id()
+
+            if (
+                current_id
+                == interaction.message.id
+            ):
+
+                clear_active_ping_id()
+
+        except discord.NotFound:
+
+            clear_active_ping_id()
+
+        except discord.Forbidden:
+
+            await interaction.response.send_message(
+                "❌ I don't have permission to delete "
+                "this message.",
+                ephemeral=True
+            )
+
+        except Exception as e:
+
+            print(
+                f"❌ Dismiss error: {e}"
+            )
+
+
+# =========================================================
 # GET READY BUTTONS
 # =========================================================
 
@@ -619,12 +741,14 @@ def get_ready_tackle_worlds():
         farm = get_farm(world)
 
         if farm["ready"]:
+
             ready_worlds.append(world)
 
         elif (
             farm["end_time"] is not None
             and farm["end_time"] <= time.time()
         ):
+
             ready_worlds.append(world)
 
     return ready_worlds
@@ -639,12 +763,14 @@ def get_ready_science_worlds():
         farm = get_farm(world)
 
         if farm["ready"]:
+
             ready_worlds.append(world)
 
         elif (
             farm["end_time"] is not None
             and farm["end_time"] <= time.time()
         ):
+
             ready_worlds.append(world)
 
     return ready_worlds
@@ -675,7 +801,7 @@ async def finish_world(
         return
 
     # -----------------------------------------------------
-    # ACKNOWLEDGE IMMEDIATELY
+    # ACKNOWLEDGE
     # -----------------------------------------------------
 
     await interaction.response.defer(
@@ -769,10 +895,6 @@ async def update_tackle_panel():
 
         return
 
-    # -----------------------------------------------------
-    # FIND EXISTING MESSAGE
-    # -----------------------------------------------------
-
     message_id = None
 
     for world in TACKLE_WORLDS:
@@ -786,10 +908,6 @@ async def update_tackle_panel():
             break
 
     message = None
-
-    # -----------------------------------------------------
-    # FETCH MESSAGE
-    # -----------------------------------------------------
 
     if message_id:
 
@@ -809,10 +927,6 @@ async def update_tackle_panel():
                 f"❌ Tackle panel fetch error: {e}"
             )
 
-    # -----------------------------------------------------
-    # READY BUTTONS ONLY
-    # -----------------------------------------------------
-
     ready_worlds = get_ready_tackle_worlds()
 
     if ready_worlds:
@@ -825,10 +939,6 @@ async def update_tackle_panel():
 
         view = None
 
-    # -----------------------------------------------------
-    # CREATE PANEL
-    # -----------------------------------------------------
-
     if message is None:
 
         message = await channel.send(
@@ -836,7 +946,6 @@ async def update_tackle_panel():
             view=view
         )
 
-        # Store message ID for all tackle worlds
         for world in TACKLE_WORLDS:
 
             farm = get_farm(world)
@@ -850,10 +959,6 @@ async def update_tackle_panel():
             )
 
         return
-
-    # -----------------------------------------------------
-    # UPDATE PANEL
-    # -----------------------------------------------------
 
     await message.edit(
         embed=tackle_embed(),
@@ -880,10 +985,6 @@ async def update_science_panel():
 
         return
 
-    # -----------------------------------------------------
-    # FIND EXISTING MESSAGE
-    # -----------------------------------------------------
-
     message_id = None
 
     for world in SCIENCE_WORLDS:
@@ -897,10 +998,6 @@ async def update_science_panel():
             break
 
     message = None
-
-    # -----------------------------------------------------
-    # FETCH MESSAGE
-    # -----------------------------------------------------
 
     if message_id:
 
@@ -920,10 +1017,6 @@ async def update_science_panel():
                 f"❌ Science panel fetch error: {e}"
             )
 
-    # -----------------------------------------------------
-    # READY BUTTONS ONLY
-    # -----------------------------------------------------
-
     ready_worlds = get_ready_science_worlds()
 
     if ready_worlds:
@@ -936,10 +1029,6 @@ async def update_science_panel():
 
         view = None
 
-    # -----------------------------------------------------
-    # CREATE PANEL
-    # -----------------------------------------------------
-
     if message is None:
 
         message = await channel.send(
@@ -947,7 +1036,6 @@ async def update_science_panel():
             view=view
         )
 
-        # Store message ID for all science worlds
         for world in SCIENCE_WORLDS:
 
             farm = get_farm(world)
@@ -961,10 +1049,6 @@ async def update_science_panel():
             )
 
         return
-
-    # -----------------------------------------------------
-    # UPDATE PANEL
-    # -----------------------------------------------------
 
     await message.edit(
         embed=science_embed(),
@@ -984,6 +1068,54 @@ async def update_panels():
 
 
 # =========================================================
+# DELETE OLD ACTIVE PING
+# =========================================================
+
+async def delete_old_ping(channel):
+
+    old_message_id = get_active_ping_id()
+
+    if not old_message_id:
+        return
+
+    try:
+
+        old_message = await channel.fetch_message(
+            old_message_id
+        )
+
+        await old_message.delete()
+
+        print(
+            f"🗑️ Deleted previous harvest ping "
+            f"({old_message_id})"
+        )
+
+    except discord.NotFound:
+
+        print(
+            "ℹ️ Previous harvest ping was already deleted."
+        )
+
+    except discord.Forbidden:
+
+        print(
+            "❌ Bot does not have permission "
+            "to delete the previous ping."
+        )
+
+    except Exception as e:
+
+        print(
+            f"❌ Error deleting old ping: {e}"
+        )
+
+    finally:
+
+        clear_active_ping_id()
+
+
+# =========================================================
 # SEND HARVEST PING
 # =========================================================
 
@@ -991,6 +1123,16 @@ async def send_harvest_ping(
     channel,
     world
 ):
+
+    # -----------------------------------------------------
+    # DELETE PREVIOUS PING FIRST
+    # -----------------------------------------------------
+
+    await delete_old_ping(channel)
+
+    # -----------------------------------------------------
+    # SELECT FARM TYPE
+    # -----------------------------------------------------
 
     if world in TACKLE_WORLDS:
 
@@ -1029,28 +1171,49 @@ async def send_harvest_ping(
             )
 
     # -----------------------------------------------------
-    # SEND PING
+    # BUILD MESSAGE
     # -----------------------------------------------------
+
+    content = ""
 
     if mentions:
 
-        await channel.send(
-            f"{' '.join(mentions)}\n\n"
-            f"{emoji} **{farm_name} is ready!**\n"
-            f"🌎 World: **{world}**\n"
-            f"🟢 **READY TO HARVEST!**",
-            allowed_mentions=discord.AllowedMentions(
-                roles=True
-            )
-        )
+        content = " ".join(mentions)
 
-    else:
+    content += (
+        f"\n\n"
+        f"{emoji} **{farm_name} is ready!**\n"
+        f"🌎 World: **{world}**\n"
+        f"🟢 **READY TO HARVEST!**"
+    )
 
-        await channel.send(
-            f"{emoji} **{farm_name} is ready!**\n"
-            f"🌎 World: **{world}**\n"
-            f"🟢 **READY TO HARVEST!**"
+    # -----------------------------------------------------
+    # SEND NEW PING
+    # -----------------------------------------------------
+
+    message = await channel.send(
+        content=content,
+        view=DismissPingView(),
+        allowed_mentions=discord.AllowedMentions(
+            roles=True
         )
+    )
+
+    # -----------------------------------------------------
+    # SAVE NEW PING ID
+    # -----------------------------------------------------
+
+    set_active_ping_id(
+        message.id
+    )
+
+    print(
+        f"🔔 New harvest ping sent for {world}"
+    )
+
+    print(
+        f"🆔 Ping message ID: {message.id}"
+    )
 
 
 # =========================================================
@@ -1080,7 +1243,10 @@ async def check_expired_timers():
             if farm["end_time"] is None:
                 continue
 
-            # Still running
+            # ------------------------------------------------
+            # STILL RUNNING
+            # ------------------------------------------------
+
             if current_time < farm["end_time"]:
                 continue
 
@@ -1098,6 +1264,8 @@ async def check_expired_timers():
 
     # -----------------------------------------------------
     # SEND PINGS OUTSIDE LOCK
+    #
+    # Only the latest expired world will remain visible.
     # -----------------------------------------------------
 
     for world in expired_worlds:
@@ -1125,10 +1293,8 @@ async def timer_loop():
 
     try:
 
-        # Check finished timers
         await check_expired_timers()
 
-        # Update countdown every 10 seconds
         await update_panels()
 
     except Exception as e:
@@ -1200,6 +1366,12 @@ async def setup(ctx):
                 ],
                 update_message_id=False
             )
+
+    await update_panels()
+
+    await ctx.send(
+        "✅ **All farms have been reset.**"
+    )
 
 
 # =========================================================
@@ -1337,6 +1509,10 @@ async def on_ready():
             ScienceView()
         )
 
+        bot.add_view(
+            DismissPingView()
+        )
+
         bot._farm_views_registered = True
 
         print(
@@ -1350,7 +1526,7 @@ async def on_ready():
     await check_expired_timers()
 
     # -----------------------------------------------------
-    # CREATE/UPDATE ONLY TWO PANELS
+    # UPDATE ONLY TWO FARM PANELS
     # -----------------------------------------------------
 
     await update_panels()
@@ -1373,6 +1549,10 @@ async def on_ready():
 
     print(
         "🔬 Science: 2 worlds / 12 hours"
+    )
+
+    print(
+        "🔔 Only ONE active harvest ping"
     )
 
     print(
@@ -1412,9 +1592,17 @@ async def on_command_error(
     print(
         f"Command error: {error}"
     )
-# =========================
+
+
+# =========================================================
 # RUN
-# =========================
+# =========================================================
+
 if __name__ == "__main__":
+
     keep_alive()
-    bot.run(os.getenv("TOKEN"))
+
+    bot.run(
+        os.getenv("TOKEN")
+    )
+```
