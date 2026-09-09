@@ -1,4 +1,3 @@
-```python
 import discord
 from discord.ext import commands, tasks
 import os
@@ -69,7 +68,6 @@ SCIENCE_ROLE_IDS = {
 # =========================================================
 
 TACKLE_TIME = 48 * 60 * 60
-
 SCIENCE_TIME = 12 * 60 * 60
 
 
@@ -201,8 +199,6 @@ def initialize_database():
 
     # -----------------------------------------------------
     # PING TABLE
-    #
-    # This stores the ONE active harvest ping.
     # -----------------------------------------------------
 
     cursor.execute("""
@@ -377,8 +373,6 @@ bot = commands.Bot(
 )
 
 
-# Prevent two people from starting
-# the same world simultaneously
 farm_lock = asyncio.Lock()
 
 
@@ -387,7 +381,6 @@ farm_lock = asyncio.Lock()
 # =========================================================
 
 def is_owner(user_id):
-
     return user_id in OWNER_USER_IDS
 
 
@@ -698,15 +691,9 @@ class DismissPingView(discord.ui.View):
 
             await interaction.message.delete()
 
-            # Only clear the database if this
-            # is the currently stored ping.
             current_id = get_active_ping_id()
 
-            if (
-                current_id
-                == interaction.message.id
-            ):
-
+            if current_id == interaction.message.id:
                 clear_active_ping_id()
 
         except discord.NotFound:
@@ -785,10 +772,6 @@ async def finish_world(
     world
 ):
 
-    # -----------------------------------------------------
-    # CHANNEL CHECK
-    # -----------------------------------------------------
-
     if not is_allowed_channel(
         interaction.channel
     ):
@@ -800,25 +783,13 @@ async def finish_world(
 
         return
 
-    # -----------------------------------------------------
-    # ACKNOWLEDGE
-    # -----------------------------------------------------
-
     await interaction.response.defer(
         ephemeral=True
     )
 
-    # -----------------------------------------------------
-    # LOCK
-    # -----------------------------------------------------
-
     async with farm_lock:
 
         farm = get_farm(world)
-
-        # -------------------------------------------------
-        # ALREADY RUNNING
-        # -------------------------------------------------
 
         if not farm["ready"]:
 
@@ -842,7 +813,8 @@ async def finish_world(
                     return
 
         # -------------------------------------------------
-        # START TIMER
+        # IMPORTANT:
+        # FINISH ALWAYS USES THE NORMAL TIMER
         # -------------------------------------------------
 
         timer = get_timer(world)
@@ -858,15 +830,7 @@ async def finish_world(
             end_time=end_time
         )
 
-    # -----------------------------------------------------
-    # UPDATE PANELS
-    # -----------------------------------------------------
-
     await update_panels()
-
-    # -----------------------------------------------------
-    # CONFIRM
-    # -----------------------------------------------------
 
     await interaction.followup.send(
         f"✅ **{world}** timer started!\n"
@@ -1124,15 +1088,7 @@ async def send_harvest_ping(
     world
 ):
 
-    # -----------------------------------------------------
-    # DELETE PREVIOUS PING FIRST
-    # -----------------------------------------------------
-
     await delete_old_ping(channel)
-
-    # -----------------------------------------------------
-    # SELECT FARM TYPE
-    # -----------------------------------------------------
 
     if world in TACKLE_WORLDS:
 
@@ -1147,10 +1103,6 @@ async def send_harvest_ping(
         farm_name = "Science Station"
 
     mentions = []
-
-    # -----------------------------------------------------
-    # GET ROLES
-    # -----------------------------------------------------
 
     for role_id in role_ids:
 
@@ -1170,10 +1122,6 @@ async def send_harvest_ping(
                 f"❌ Role {role_id} not found."
             )
 
-    # -----------------------------------------------------
-    # BUILD MESSAGE
-    # -----------------------------------------------------
-
     content = ""
 
     if mentions:
@@ -1187,10 +1135,6 @@ async def send_harvest_ping(
         f"🟢 **READY TO HARVEST!**"
     )
 
-    # -----------------------------------------------------
-    # SEND NEW PING
-    # -----------------------------------------------------
-
     message = await channel.send(
         content=content,
         view=DismissPingView(),
@@ -1198,10 +1142,6 @@ async def send_harvest_ping(
             roles=True
         )
     )
-
-    # -----------------------------------------------------
-    # SAVE NEW PING ID
-    # -----------------------------------------------------
 
     set_active_ping_id(
         message.id
@@ -1243,16 +1183,8 @@ async def check_expired_timers():
             if farm["end_time"] is None:
                 continue
 
-            # ------------------------------------------------
-            # STILL RUNNING
-            # ------------------------------------------------
-
             if current_time < farm["end_time"]:
                 continue
-
-            # ------------------------------------------------
-            # TIMER FINISHED
-            # ------------------------------------------------
 
             update_farm(
                 world,
@@ -1262,22 +1194,12 @@ async def check_expired_timers():
 
             expired_worlds.append(world)
 
-    # -----------------------------------------------------
-    # SEND PINGS OUTSIDE LOCK
-    #
-    # Only the latest expired world will remain visible.
-    # -----------------------------------------------------
-
     for world in expired_worlds:
 
         await send_harvest_ping(
             channel,
             world
         )
-
-    # -----------------------------------------------------
-    # UPDATE PANELS
-    # -----------------------------------------------------
 
     if expired_worlds:
 
@@ -1317,10 +1239,6 @@ async def before_timer_loop():
 @bot.command()
 async def setup(ctx):
 
-    # -----------------------------------------------------
-    # OWNER ONLY
-    # -----------------------------------------------------
-
     if not is_owner(
         ctx.author.id
     ):
@@ -1332,10 +1250,6 @@ async def setup(ctx):
 
         return
 
-    # -----------------------------------------------------
-    # CHANNEL CHECK
-    # -----------------------------------------------------
-
     if not is_allowed_channel(
         ctx.channel
     ):
@@ -1346,10 +1260,6 @@ async def setup(ctx):
         )
 
         return
-
-    # -----------------------------------------------------
-    # RESET ALL WORLDS
-    # -----------------------------------------------------
 
     async with farm_lock:
 
@@ -1375,11 +1285,11 @@ async def setup(ctx):
 
 
 # =========================================================
-# STATUS COMMAND
+# SET CURRENT TIMER COMMAND
 # =========================================================
 
 @bot.command()
-async def status(ctx):
+async def settime(ctx, world: str, hours: float):
 
     # -----------------------------------------------------
     # OWNER ONLY
@@ -1412,17 +1322,119 @@ async def status(ctx):
         return
 
     # -----------------------------------------------------
-    # EMBED
+    # WORLD NAME
     # -----------------------------------------------------
+
+    world = world.upper()
+
+    if world not in ALL_WORLDS:
+
+        await ctx.send(
+            f"❌ Unknown world: `{world}`\n\n"
+            f"Available worlds:\n"
+            f"🎯 {', '.join(TACKLE_WORLDS)}\n"
+            f"🔬 {', '.join(SCIENCE_WORLDS)}"
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # HOURS CHECK
+    # -----------------------------------------------------
+
+    if hours <= 0:
+
+        await ctx.send(
+            "❌ The number of hours must be "
+            "greater than 0."
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # CONVERT HOURS TO SECONDS
+    # -----------------------------------------------------
+
+    seconds = int(
+        hours * 60 * 60
+    )
+
+    # -----------------------------------------------------
+    # SET CURRENT TIMER
+    #
+    # IMPORTANT:
+    # This changes ONLY the current cycle.
+    #
+    # The normal timer remains:
+    # Science = 12 hours
+    # Tackle = 48 hours
+    # -----------------------------------------------------
+
+    end_time = (
+        time.time()
+        + seconds
+    )
+
+    async with farm_lock:
+
+        update_farm(
+            world,
+            ready=False,
+            end_time=end_time
+        )
+
+    # -----------------------------------------------------
+    # UPDATE PANEL
+    # -----------------------------------------------------
+
+    await update_panels()
+
+    # -----------------------------------------------------
+    # CONFIRM
+    # -----------------------------------------------------
+
+    await ctx.send(
+        f"✅ **{world}** timer set to "
+        f"**{format_time(seconds)}** remaining.\n\n"
+        f"⏱️ This only changes the **current cycle**.\n"
+        f"🔄 The next normal Finish will use the "
+        f"regular timer."
+    )
+
+
+# =========================================================
+# STATUS COMMAND
+# =========================================================
+
+@bot.command()
+async def status(ctx):
+
+    if not is_owner(
+        ctx.author.id
+    ):
+
+        await ctx.send(
+            "❌ **You don't have permission "
+            "to use this command.**"
+        )
+
+        return
+
+    if not is_allowed_channel(
+        ctx.channel
+    ):
+
+        await ctx.send(
+            "❌ This command can only be "
+            "used in the configured farm channel."
+        )
+
+        return
 
     embed = discord.Embed(
         title="🌾 Farm Status",
         color=discord.Color.blurple()
     )
-
-    # =====================================================
-    # TACKLE
-    # =====================================================
 
     tackle_text = ""
 
@@ -1438,10 +1450,6 @@ async def status(ctx):
         value=tackle_text,
         inline=False
     )
-
-    # =====================================================
-    # SCIENCE
-    # =====================================================
 
     science_text = ""
 
@@ -1589,6 +1597,19 @@ async def on_command_error(
 
         return
 
+    if isinstance(
+        error,
+        commands.BadArgument
+    ):
+
+        await ctx.send(
+            "❌ Invalid command format.\n\n"
+            "Example:\n"
+            "`!settime RGREG 1`"
+        )
+
+        return
+
     print(
         f"Command error: {error}"
     )
@@ -1605,4 +1626,3 @@ if __name__ == "__main__":
     bot.run(
         os.getenv("TOKEN")
     )
-```
