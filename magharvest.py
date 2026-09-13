@@ -1,117 +1,81 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import os
 from flask import Flask
 from threading import Thread
 import time
 import sqlite3
 import asyncio
-
 # =========================================================
 # FLASK SERVER FOR RENDER
 # =========================================================
-
 app = Flask(__name__)
-
-
 @app.route("/")
 def home():
     return "Farm Bot is online!"
-
-
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-
     app.run(
         host="0.0.0.0",
         port=port
     )
-
-
 def keep_alive():
     thread = Thread(target=run_flask)
     thread.daemon = True
     thread.start()
-
-
-# =========================================================
-# CONFIGURATION
-# =========================================================
-
 OWNER_USER_IDS = {
     923096413934616596,
     760023911764197396,
 }
-
-ALLOWED_CATEGORY_ID = 1401449789983428719
-
-CHANNEL_ID = 1546817067464917022
-
-
-# =========================================================
-# ROLES
-# =========================================================
-
+FARM_CHANNEL_ID = 1488924892983328861
+ALLOWED_CATEGORY_ID = 1488543622545539162
+FARM_DATABASE_FILE = "farm_bot.db"
+TACKLE_EMOJI = discord.PartialEmoji(name="tackle", id=1548652613405249616, animated=False)
+SCIENCE_EMOJI = discord.PartialEmoji(name="science", id=1548654229537955850, animated=False)
 TACKLE_ROLE_IDS = {
     1401454637877297253,
     1401455558514577489,
 }
-
 SCIENCE_ROLE_IDS = {
     1401454637877297253,
     1401455558514577489,
 }
-
-
-# =========================================================
-# TIMER SETTINGS
-# =========================================================
-
 TACKLE_TIME = 48 * 60 * 60
 SCIENCE_TIME = 12 * 60 * 60
-
-
-# =========================================================
-# WORLDS
-# =========================================================
-
 TACKLE_WORLDS = [
     "MAMAMOTACKLE",
     "TCKLSZ",
     "EVDYT",
 ]
-
 SCIENCE_WORLDS = [
     "RGREG",
     "STROSTATS",
 ]
-
-ALL_WORLDS = TACKLE_WORLDS + SCIENCE_WORLDS
-
-
-# =========================================================
-# DATABASE
-# =========================================================
-
-DATABASE_FILE = "farm_bot.db"
-
-
-def get_db():
+ALL_FARM_WORLDS = (
+    TACKLE_WORLDS
+    + SCIENCE_WORLDS
+)
+SPAM_CHANNEL_ID = 1488924892983328861
+SPAM_DATABASE_FILE = "spam_bot.db"
+TWO_HOURS = 2 * 60 * 60
+SIX_HOURS = 6 * 60 * 60
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents
+)
+farm_lock = asyncio.Lock()
+spam_lock = asyncio.Lock()
+def get_farm_db():
     return sqlite3.connect(
-        DATABASE_FILE,
+        FARM_DATABASE_FILE,
         timeout=30
     )
-
-
-def initialize_database():
-
-    db = get_db()
+def initialize_farm_database():
+    db = get_farm_db()
     cursor = db.cursor()
-
-    # -----------------------------------------------------
-    # FARM TABLE
-    # -----------------------------------------------------
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS farms (
             world TEXT PRIMARY KEY,
@@ -121,40 +85,20 @@ def initialize_database():
             panel_message_id INTEGER
         )
     """)
-
-    # -----------------------------------------------------
-    # CHECK COLUMNS
-    # -----------------------------------------------------
-
     cursor.execute("PRAGMA table_info(farms)")
-
     columns = {
         row[1]
         for row in cursor.fetchall()
     }
-
-    # -----------------------------------------------------
-    # ADD PANEL MESSAGE ID IF OLD DATABASE
-    # -----------------------------------------------------
-
     if "panel_message_id" not in columns:
-
-        print("⚠️ Old database detected.")
+        print("⚠️ Old farm database detected.")
         print("🔧 Adding panel_message_id column...")
-
         cursor.execute("""
             ALTER TABLE farms
             ADD COLUMN panel_message_id INTEGER
         """)
-
-        print("✅ Database upgraded successfully.")
-
-    # -----------------------------------------------------
-    # ADD TACKLE WORLDS
-    # -----------------------------------------------------
-
+        print("✅ Farm database upgraded successfully.")
     for world in TACKLE_WORLDS:
-
         cursor.execute("""
             INSERT OR IGNORE INTO farms
             (
@@ -172,13 +116,7 @@ def initialize_database():
                 NULL
             )
         """, (world,))
-
-    # -----------------------------------------------------
-    # ADD SCIENCE WORLDS
-    # -----------------------------------------------------
-
     for world in SCIENCE_WORLDS:
-
         cursor.execute("""
             INSERT OR IGNORE INTO farms
             (
@@ -196,39 +134,23 @@ def initialize_database():
                 NULL
             )
         """, (world,))
-
-    # -----------------------------------------------------
-    # PING TABLE
-    # -----------------------------------------------------
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS active_ping (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             message_id INTEGER
         )
     """)
-
     cursor.execute("""
         INSERT OR IGNORE INTO active_ping
         (id, message_id)
         VALUES (1, NULL)
     """)
-
     db.commit()
     db.close()
-
-    print("✅ Database initialized.")
-
-
-# =========================================================
-# FARM DATABASE FUNCTIONS
-# =========================================================
-
+    print("✅ Farm database initialized.")
 def get_farm(world):
-
-    db = get_db()
+    db = get_farm_db()
     cursor = db.cursor()
-
     cursor.execute("""
         SELECT
             farm_type,
@@ -238,28 +160,21 @@ def get_farm(world):
         FROM farms
         WHERE world = ?
     """, (world,))
-
     row = cursor.fetchone()
-
     db.close()
-
     if row is None:
-
         return {
             "farm_type": None,
             "ready": True,
             "end_time": None,
             "panel_message_id": None,
         }
-
     return {
         "farm_type": row[0],
         "ready": bool(row[1]),
         "end_time": row[2],
         "panel_message_id": row[3],
     }
-
-
 def update_farm(
     world,
     ready,
@@ -267,12 +182,9 @@ def update_farm(
     panel_message_id=None,
     update_message_id=False
 ):
-
-    db = get_db()
+    db = get_farm_db()
     cursor = db.cursor()
-
     if update_message_id:
-
         cursor.execute("""
             UPDATE farms
             SET
@@ -286,9 +198,7 @@ def update_farm(
             panel_message_id,
             world
         ))
-
     else:
-
         cursor.execute("""
             UPDATE farms
             SET
@@ -300,508 +210,383 @@ def update_farm(
             end_time,
             world
         ))
-
     db.commit()
     db.close()
-
-
-# =========================================================
-# ACTIVE PING DATABASE
-# =========================================================
-
 def get_active_ping_id():
-
-    db = get_db()
+    db = get_farm_db()
     cursor = db.cursor()
-
     cursor.execute("""
         SELECT message_id
         FROM active_ping
         WHERE id = 1
     """)
-
     row = cursor.fetchone()
-
     db.close()
-
     if row is None:
         return None
-
     return row[0]
-
-
 def set_active_ping_id(message_id):
-
-    db = get_db()
+    db = get_farm_db()
     cursor = db.cursor()
-
     cursor.execute("""
         UPDATE active_ping
         SET message_id = ?
         WHERE id = 1
     """, (message_id,))
-
     db.commit()
     db.close()
-
-
 def clear_active_ping_id():
-
-    db = get_db()
+    db = get_farm_db()
     cursor = db.cursor()
-
     cursor.execute("""
         UPDATE active_ping
         SET message_id = NULL
         WHERE id = 1
     """)
-
     db.commit()
     db.close()
-
-
-# =========================================================
-# DISCORD BOT
-# =========================================================
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents
-)
-
-
-farm_lock = asyncio.Lock()
-
-
-# =========================================================
-# PERMISSIONS
-# =========================================================
-
+def get_spam_db():
+    conn = sqlite3.connect(
+        SPAM_DATABASE_FILE,
+        timeout=30
+    )
+    conn.row_factory = sqlite3.Row
+    return conn
+def initialize_spam_database():
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+        AND name = 'spam_worlds'
+    """)
+    table_exists = cursor.fetchone()
+    if not table_exists:
+        cursor.execute("""
+            CREATE TABLE spam_worlds (
+                world TEXT PRIMARY KEY,
+                end_time_2h REAL,
+                end_time_6h REAL,
+                added_by INTEGER NOT NULL
+            )
+        """)
+        print(
+            "✅ New spam_worlds table created."
+        )
+    else:
+        cursor.execute("""
+            PRAGMA table_info(spam_worlds)
+        """)
+        columns = {
+            row["name"]
+            for row in cursor.fetchall()
+        }
+        if "end_time_2h" not in columns:
+            cursor.execute("""
+                ALTER TABLE spam_worlds
+                ADD COLUMN end_time_2h REAL
+            """)
+            print(
+                "✅ Added end_time_2h column."
+            )
+        if "end_time_6h" not in columns:
+            cursor.execute("""
+                ALTER TABLE spam_worlds
+                ADD COLUMN end_time_6h REAL
+            """)
+            print(
+                "✅ Added end_time_6h column."
+            )
+        if (
+            "end_time" in columns
+            and
+            "duration_hours" in columns
+        ):
+            print(
+                "🔄 Old spam timer data detected."
+            )
+            cursor.execute("""
+                SELECT
+                    world,
+                    end_time,
+                    duration_hours
+                FROM spam_worlds
+            """)
+            old_rows = cursor.fetchall()
+            for row in old_rows:
+                world = row["world"]
+                end_time = row["end_time"]
+                duration = row["duration_hours"]
+                if end_time is None:
+                    continue
+                if duration == 2:
+                    cursor.execute("""
+                        UPDATE spam_worlds
+                        SET end_time_2h = ?
+                        WHERE world = ?
+                    """, (
+                        end_time,
+                        world
+                    ))
+                elif duration == 6:
+                    cursor.execute("""
+                        UPDATE spam_worlds
+                        SET end_time_6h = ?
+                        WHERE world = ?
+                    """, (
+                        end_time,
+                        world
+                    ))
+            print(
+                "✅ Old spam timer data migrated."
+            )
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS spam_panel (
+            id INTEGER PRIMARY KEY,
+            owner_id INTEGER,
+            panel_message_id INTEGER
+        )
+    """)
+    cursor.execute("""
+        INSERT OR IGNORE INTO spam_panel
+        (
+            id,
+            owner_id,
+            panel_message_id
+        )
+        VALUES (
+            1,
+            NULL,
+            NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+    print(
+        "✅ Spam database initialized."
+    )
 def is_owner(user_id):
     return user_id in OWNER_USER_IDS
-
-
-def is_allowed_channel(channel):
-
-    if channel is None:
-        return False
-
-    if channel.id != CHANNEL_ID:
-        return False
-
-    if channel.category_id != ALLOWED_CATEGORY_ID:
-        return False
-
-    return True
-
-
-# =========================================================
-# TIME FORMAT
-# =========================================================
-
 def format_time(seconds):
-
     seconds = max(
         0,
         int(seconds)
     )
-
     days = seconds // 86400
     seconds %= 86400
-
     hours = seconds // 3600
     seconds %= 3600
-
     minutes = seconds // 60
     seconds %= 60
-
     if days > 0:
-
         return (
             f"{days}d "
             f"{hours:02d}h "
             f"{minutes:02d}m "
             f"{seconds:02d}s"
         )
-
     return (
         f"{hours:02d}h "
         f"{minutes:02d}m "
         f"{seconds:02d}s"
     )
-
-
-# =========================================================
-# FARM INFORMATION
-# =========================================================
-
+def is_allowed_farm_channel(channel):
+    if channel is None:
+        return False
+    if channel.id != FARM_CHANNEL_ID:
+        return False
+    if channel.category_id != ALLOWED_CATEGORY_ID:
+        return False
+    return True
 def get_farm_type(world):
-
     if world in TACKLE_WORLDS:
         return "tackle"
-
     if world in SCIENCE_WORLDS:
         return "science"
-
     return None
-
-
 def get_timer(world):
-
     if world in TACKLE_WORLDS:
         return TACKLE_TIME
-
     if world in SCIENCE_WORLDS:
         return SCIENCE_TIME
-
     return 0
-
-
-# =========================================================
-# GET FARM CHANNEL
-# =========================================================
-
 async def get_farm_channel():
-
-    channel = bot.get_channel(CHANNEL_ID)
-
+    channel = bot.get_channel(
+        FARM_CHANNEL_ID
+    )
     if channel is not None:
         return channel
-
     try:
-
-        return await bot.fetch_channel(CHANNEL_ID)
-
+        return await bot.fetch_channel(
+            FARM_CHANNEL_ID
+        )
     except Exception as e:
-
         print(
             f"❌ Could not find farm channel: {e}"
         )
-
         return None
-
-
-# =========================================================
-# STATUS HELPER
-# =========================================================
-
 def get_world_status(world):
-
     farm = get_farm(world)
-
     if farm["ready"]:
         return "🟢 **READY**"
-
     if farm["end_time"] is None:
         return "🟢 **READY**"
-
     remaining = (
         farm["end_time"]
         - time.time()
     )
-
     if remaining <= 0:
         return "🟢 **READY**"
-
-    return f"⏳ `{format_time(remaining)}`"
-
-
-# =========================================================
-# TACKLE EMBED
-# =========================================================
-
+    return (
+        f"⏳ `{format_time(remaining)}`"
+    )
 def tackle_embed():
-
     embed = discord.Embed(
-        title="🎯 TACKLE FARM",
+        title=f"{TACKLE_EMOJI} TACKLE FARM",
         color=discord.Color.green()
     )
-
     description = (
         "Harvest the world, then click its "
-        "**FINISH** button.\n\n"
+        "**WORLDNAME** button.\n\n"
     )
-
     for world in TACKLE_WORLDS:
-
         description += (
             f"🌎 **{world}** → "
             f"{get_world_status(world)}\n"
         )
-
     description += (
         "\n⏱️ Harvest timer: **48 hours**"
     )
-
     embed.description = description
-
     return embed
-
-
-# =========================================================
-# SCIENCE EMBED
-# =========================================================
-
 def science_embed():
-
     embed = discord.Embed(
-        title="🔬 SCIENCE STATION",
+        title=f"{SCIENCE_EMOJI} SCIENCE STATION",
         color=discord.Color.blue()
     )
-
     description = (
         "Harvest the world, then click its "
-        "**FINISH** button.\n\n"
+        "**WORLDNAME** button.\n\n"
     )
-
     for world in SCIENCE_WORLDS:
-
         description += (
             f"🌎 **{world}** → "
             f"{get_world_status(world)}\n"
         )
-
     description += (
         "\n⏱️ Harvest timer: **12 hours**"
     )
-
     embed.description = description
-
     return embed
-
-
-# =========================================================
-# TACKLE VIEW
-# =========================================================
-
 class TackleView(discord.ui.View):
-
     def __init__(
         self,
         ready_worlds=None
     ):
-
         super().__init__(
             timeout=None
         )
-
         if ready_worlds is None:
             ready_worlds = TACKLE_WORLDS
-
         for world in TACKLE_WORLDS:
-
             if world not in ready_worlds:
                 continue
-
             button = discord.ui.Button(
                 label=world,
                 style=discord.ButtonStyle.green,
-                emoji="🎯",
+                emoji=TACKLE_EMOJI,
                 custom_id=f"tackle_{world.lower()}"
             )
-
             async def callback(
                 interaction,
                 world=world
             ):
-
                 await finish_world(
                     interaction,
                     world
                 )
-
             button.callback = callback
-
             self.add_item(button)
-
-
-# =========================================================
-# SCIENCE VIEW
-# =========================================================
-
 class ScienceView(discord.ui.View):
-
     def __init__(
         self,
         ready_worlds=None
     ):
-
         super().__init__(
             timeout=None
         )
-
         if ready_worlds is None:
             ready_worlds = SCIENCE_WORLDS
-
         for world in SCIENCE_WORLDS:
-
             if world not in ready_worlds:
                 continue
-
             button = discord.ui.Button(
                 label=world,
                 style=discord.ButtonStyle.blurple,
-                emoji="🔬",
+                emoji=SCIENCE_EMOJI,
                 custom_id=f"science_{world.lower()}"
             )
-
             async def callback(
                 interaction,
                 world=world
             ):
-
                 await finish_world(
                     interaction,
                     world
                 )
-
             button.callback = callback
-
             self.add_item(button)
-
-
-# =========================================================
-# DISMISS PING VIEW
-# =========================================================
-
-class DismissPingView(discord.ui.View):
-
-    def __init__(self):
-
-        super().__init__(
-            timeout=None
-        )
-
-    @discord.ui.button(
-        label="Dismiss",
-        emoji="🔕",
-        style=discord.ButtonStyle.secondary,
-        custom_id="dismiss_harvest_ping"
-    )
-    async def dismiss(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-
-        try:
-
-            await interaction.message.delete()
-
-            current_id = get_active_ping_id()
-
-            if current_id == interaction.message.id:
-                clear_active_ping_id()
-
-        except discord.NotFound:
-
-            clear_active_ping_id()
-
-        except discord.Forbidden:
-
-            await interaction.response.send_message(
-                "❌ I don't have permission to delete "
-                "this message.",
-                ephemeral=True
-            )
-
-        except Exception as e:
-
-            print(
-                f"❌ Dismiss error: {e}"
-            )
-
-
-# =========================================================
-# GET READY BUTTONS
-# =========================================================
-
 def get_ready_tackle_worlds():
-
     ready_worlds = []
-
     for world in TACKLE_WORLDS:
-
         farm = get_farm(world)
-
         if farm["ready"]:
-
             ready_worlds.append(world)
-
         elif (
             farm["end_time"] is not None
-            and farm["end_time"] <= time.time()
+            and
+            farm["end_time"] <= time.time()
         ):
-
             ready_worlds.append(world)
-
     return ready_worlds
-
-
 def get_ready_science_worlds():
-
     ready_worlds = []
-
     for world in SCIENCE_WORLDS:
-
         farm = get_farm(world)
-
         if farm["ready"]:
-
             ready_worlds.append(world)
-
         elif (
             farm["end_time"] is not None
-            and farm["end_time"] <= time.time()
+            and
+            farm["end_time"] <= time.time()
         ):
-
             ready_worlds.append(world)
-
     return ready_worlds
-
-
-# =========================================================
-# FINISH WORLD
-# =========================================================
-
 async def finish_world(
     interaction,
     world
 ):
-
-    if not is_allowed_channel(
+    if not is_allowed_farm_channel(
         interaction.channel
     ):
-
         await interaction.response.send_message(
             "❌ This button cannot be used here.",
             ephemeral=True
         )
-
         return
-
     await interaction.response.defer(
         ephemeral=True
     )
-
     async with farm_lock:
-
         farm = get_farm(world)
-
         if not farm["ready"]:
-
             if farm["end_time"] is not None:
-
                 remaining = (
                     farm["end_time"]
                     - time.time()
                 )
-
                 if remaining > 0:
-
                     await interaction.followup.send(
                         f"⏳ **{world}** is already "
                         f"on cooldown.\n\n"
@@ -809,111 +594,66 @@ async def finish_world(
                         f"**{format_time(remaining)}**",
                         ephemeral=True
                     )
-
                     return
-
-        # -------------------------------------------------
-        # IMPORTANT:
-        # FINISH ALWAYS USES THE NORMAL TIMER
-        # -------------------------------------------------
-
         timer = get_timer(world)
-
         end_time = (
             time.time()
             + timer
         )
-
         update_farm(
             world,
             ready=False,
             end_time=end_time
         )
-
-    await update_panels()
-
+    await update_farm_panels()
     await interaction.followup.send(
         f"✅ **{world}** timer started!\n"
         f"⏳ Next harvest in "
         f"**{format_time(timer)}**.",
         ephemeral=True
     )
-
-
-# =========================================================
-# UPDATE TACKLE PANEL
-# =========================================================
-
 async def update_tackle_panel():
-
     channel = await get_farm_channel()
-
     if channel is None:
         return
-
-    if not is_allowed_channel(channel):
-
+    if not is_allowed_farm_channel(channel):
         print(
             "❌ Farm channel/category does not match."
         )
-
         return
-
     message_id = None
-
     for world in TACKLE_WORLDS:
-
         farm = get_farm(world)
-
         if farm["panel_message_id"]:
-
-            message_id = farm["panel_message_id"]
-
+            message_id = farm[
+                "panel_message_id"
+            ]
             break
-
     message = None
-
     if message_id:
-
         try:
-
             message = await channel.fetch_message(
                 message_id
             )
-
         except discord.NotFound:
-
             message = None
-
         except Exception as e:
-
             print(
                 f"❌ Tackle panel fetch error: {e}"
             )
-
     ready_worlds = get_ready_tackle_worlds()
-
-    if ready_worlds:
-
-        view = TackleView(
-            ready_worlds
-        )
-
-    else:
-
-        view = None
-
+    view = (
+        TackleView(ready_worlds)
+        if ready_worlds
+        else None
+    )
     if message is None:
-
         message = await channel.send(
             embed=tackle_embed(),
             view=view
         )
-
         for world in TACKLE_WORLDS:
-
             farm = get_farm(world)
-
             update_farm(
                 world,
                 ready=farm["ready"],
@@ -921,89 +661,53 @@ async def update_tackle_panel():
                 panel_message_id=message.id,
                 update_message_id=True
             )
-
         return
-
     await message.edit(
         embed=tackle_embed(),
         view=view
     )
-
-
-# =========================================================
-# UPDATE SCIENCE PANEL
-# =========================================================
-
 async def update_science_panel():
-
     channel = await get_farm_channel()
-
     if channel is None:
         return
-
-    if not is_allowed_channel(channel):
-
+    if not is_allowed_farm_channel(channel):
         print(
             "❌ Farm channel/category does not match."
         )
-
         return
-
     message_id = None
-
     for world in SCIENCE_WORLDS:
-
         farm = get_farm(world)
-
         if farm["panel_message_id"]:
-
-            message_id = farm["panel_message_id"]
-
+            message_id = farm[
+                "panel_message_id"
+            ]
             break
-
     message = None
-
     if message_id:
-
         try:
-
             message = await channel.fetch_message(
                 message_id
             )
-
         except discord.NotFound:
-
             message = None
-
         except Exception as e:
-
             print(
                 f"❌ Science panel fetch error: {e}"
             )
-
     ready_worlds = get_ready_science_worlds()
-
-    if ready_worlds:
-
-        view = ScienceView(
-            ready_worlds
-        )
-
-    else:
-
-        view = None
-
+    view = (
+        ScienceView(ready_worlds)
+        if ready_worlds
+        else None
+    )
     if message is None:
-
         message = await channel.send(
             embed=science_embed(),
             view=view
         )
-
         for world in SCIENCE_WORLDS:
-
             farm = get_farm(world)
-
             update_farm(
                 world,
                 ready=farm["ready"],
@@ -1011,262 +715,161 @@ async def update_science_panel():
                 panel_message_id=message.id,
                 update_message_id=True
             )
-
         return
-
     await message.edit(
         embed=science_embed(),
         view=view
     )
-
-
-# =========================================================
-# UPDATE BOTH PANELS
-# =========================================================
-
-async def update_panels():
-
+async def update_farm_panels():
     await update_tackle_panel()
-
     await update_science_panel()
-
-
-# =========================================================
-# DELETE OLD ACTIVE PING
-# =========================================================
-
 async def delete_old_ping(channel):
-
     old_message_id = get_active_ping_id()
-
     if not old_message_id:
         return
-
     try:
-
         old_message = await channel.fetch_message(
             old_message_id
         )
-
         await old_message.delete()
-
         print(
             f"🗑️ Deleted previous harvest ping "
             f"({old_message_id})"
         )
-
     except discord.NotFound:
-
         print(
             "ℹ️ Previous harvest ping was already deleted."
         )
-
     except discord.Forbidden:
-
         print(
             "❌ Bot does not have permission "
             "to delete the previous ping."
         )
-
     except Exception as e:
-
         print(
             f"❌ Error deleting old ping: {e}"
         )
-
     finally:
-
         clear_active_ping_id()
-
-
-# =========================================================
-# SEND HARVEST PING
-# =========================================================
-
 async def send_harvest_ping(
     channel,
     world
 ):
-
     await delete_old_ping(channel)
-
     if world in TACKLE_WORLDS:
-
         role_ids = TACKLE_ROLE_IDS
-        emoji = "🎯"
+        emoji = TACKLE_EMOJI
         farm_name = "Tackle Farm"
-
     else:
-
         role_ids = SCIENCE_ROLE_IDS
-        emoji = "🔬"
+        emoji = SCIENCE_EMOJI
         farm_name = "Science Station"
-
     mentions = []
-
     for role_id in role_ids:
-
         role = channel.guild.get_role(
             role_id
         )
-
         if role:
-
             mentions.append(
                 role.mention
             )
-
         else:
-
             print(
                 f"❌ Role {role_id} not found."
             )
-
     content = ""
-
     if mentions:
-
         content = " ".join(mentions)
-
     content += (
         f"\n\n"
         f"{emoji} **{farm_name} is ready!**\n"
         f"🌎 World: **{world}**\n"
         f"🟢 **READY TO HARVEST!**"
     )
-
     message = await channel.send(
         content=content,
-        view=DismissPingView(),
         allowed_mentions=discord.AllowedMentions(
             roles=True
         )
     )
-
     set_active_ping_id(
         message.id
     )
-
     print(
         f"🔔 New harvest ping sent for {world}"
     )
-
     print(
         f"🆔 Ping message ID: {message.id}"
     )
-
-
-# =========================================================
-# CHECK EXPIRED TIMERS
-# =========================================================
-
-async def check_expired_timers():
-
+async def check_expired_farm_timers():
     channel = await get_farm_channel()
-
     if channel is None:
         return
-
     expired_worlds = []
-
     async with farm_lock:
-
         current_time = time.time()
-
-        for world in ALL_WORLDS:
-
+        for world in ALL_FARM_WORLDS:
             farm = get_farm(world)
-
             if farm["ready"]:
                 continue
-
             if farm["end_time"] is None:
                 continue
-
             if current_time < farm["end_time"]:
                 continue
-
             update_farm(
                 world,
                 ready=True,
                 end_time=None
             )
-
             expired_worlds.append(world)
-
     for world in expired_worlds:
-
         await send_harvest_ping(
             channel,
             world
         )
-
     if expired_worlds:
-
-        await update_panels()
-
-
-# =========================================================
-# TIMER LOOP
-# =========================================================
-
+        await update_farm_panels()
 @tasks.loop(seconds=10)
 async def timer_loop():
-
     try:
-
-        await check_expired_timers()
-
-        await update_panels()
-
+        await check_expired_farm_timers()
+        await update_farm_panels()
     except Exception as e:
-
         print(
-            f"❌ Timer loop error: {e}"
+            f"❌ Farm timer loop error: {e}"
         )
-
-
 @timer_loop.before_loop
 async def before_timer_loop():
-
     await bot.wait_until_ready()
-
-
-# =========================================================
-# SETUP COMMAND
-# =========================================================
-
-@bot.command()
-async def setup(ctx):
-
+@bot.tree.command(
+    name="setup",
+    description="Reset all farm timers and panels."
+)
+async def setup(
+    interaction: discord.Interaction
+):
     if not is_owner(
-        ctx.author.id
+        interaction.user.id
     ):
-
-        await ctx.send(
+        await interaction.response.send_message(
             "❌ **You don't have permission "
-            "to use this command.**"
+            "to use this command.**",
+            ephemeral=True
         )
-
         return
-
-    if not is_allowed_channel(
-        ctx.channel
+    if not is_allowed_farm_channel(
+        interaction.channel
     ):
-
-        await ctx.send(
+        await interaction.response.send_message(
             "❌ This command can only be "
-            "used in the configured farm channel."
+            "used in the configured farm channel.",
+            ephemeral=True
         )
-
         return
-
+    await interaction.response.defer()
     async with farm_lock:
-
-        for world in ALL_WORLDS:
-
+        for world in ALL_FARM_WORLDS:
             farm = get_farm(world)
-
             update_farm(
                 world,
                 ready=True,
@@ -1276,353 +879,1253 @@ async def setup(ctx):
                 ],
                 update_message_id=False
             )
-
-    await update_panels()
-
-    await ctx.send(
+    await update_farm_panels()
+    await interaction.followup.send(
         "✅ **All farms have been reset.**"
     )
-
-
-# =========================================================
-# SET CURRENT TIMER COMMAND
-# =========================================================
-
-@bot.command()
-async def settime(ctx, world: str, hours: float):
-
-    # -----------------------------------------------------
-    # OWNER ONLY
-    # -----------------------------------------------------
-
+@bot.tree.command(
+    name="settime",
+    description="Set the current timer for a farm world."
+)
+@app_commands.describe(
+    world="The farm world",
+    hours="How many hours the current timer should have"
+)
+@app_commands.choices(
+    world=[
+        app_commands.Choice(
+            name="MAMAMOTACKLE",
+            value="MAMAMOTACKLE"
+        ),
+        app_commands.Choice(
+            name="TCKLSZ",
+            value="TCKLSZ"
+        ),
+        app_commands.Choice(
+            name="EVDYT",
+            value="EVDYT"
+        ),
+        app_commands.Choice(
+            name="RGREG",
+            value="RGREG"
+        ),
+        app_commands.Choice(
+            name="STROSTATS",
+            value="STROSTATS"
+        ),
+    ]
+)
+async def settime(
+    interaction: discord.Interaction,
+    world: app_commands.Choice[str],
+    hours: float
+):
     if not is_owner(
-        ctx.author.id
+        interaction.user.id
     ):
-
-        await ctx.send(
+        await interaction.response.send_message(
             "❌ **You don't have permission "
-            "to use this command.**"
+            "to use this command.**",
+            ephemeral=True
         )
-
         return
-
-    # -----------------------------------------------------
-    # CHANNEL CHECK
-    # -----------------------------------------------------
-
-    if not is_allowed_channel(
-        ctx.channel
+    if not is_allowed_farm_channel(
+        interaction.channel
     ):
-
-        await ctx.send(
+        await interaction.response.send_message(
             "❌ This command can only be "
-            "used in the configured farm channel."
+            "used in the configured farm channel.",
+            ephemeral=True
         )
-
         return
-
-    # -----------------------------------------------------
-    # WORLD NAME
-    # -----------------------------------------------------
-
-    world = world.upper()
-
-    if world not in ALL_WORLDS:
-
-        await ctx.send(
-            f"❌ Unknown world: `{world}`\n\n"
-            f"Available worlds:\n"
-            f"🎯 {', '.join(TACKLE_WORLDS)}\n"
-            f"🔬 {', '.join(SCIENCE_WORLDS)}"
-        )
-
-        return
-
-    # -----------------------------------------------------
-    # HOURS CHECK
-    # -----------------------------------------------------
-
+    world = world.value
     if hours <= 0:
-
-        await ctx.send(
+        await interaction.response.send_message(
             "❌ The number of hours must be "
-            "greater than 0."
+            "greater than 0.",
+            ephemeral=True
         )
-
         return
-
-    # -----------------------------------------------------
-    # CONVERT HOURS TO SECONDS
-    # -----------------------------------------------------
-
     seconds = int(
         hours * 60 * 60
     )
-
-    # -----------------------------------------------------
-    # SET CURRENT TIMER
-    #
-    # IMPORTANT:
-    # This changes ONLY the current cycle.
-    #
-    # The normal timer remains:
-    # Science = 12 hours
-    # Tackle = 48 hours
-    # -----------------------------------------------------
-
     end_time = (
         time.time()
         + seconds
     )
-
     async with farm_lock:
-
         update_farm(
             world,
             ready=False,
             end_time=end_time
         )
-
-    # -----------------------------------------------------
-    # UPDATE PANEL
-    # -----------------------------------------------------
-
-    await update_panels()
-
-    # -----------------------------------------------------
-    # CONFIRM
-    # -----------------------------------------------------
-
-    await ctx.send(
+    await update_farm_panels()
+    await interaction.response.send_message(
         f"✅ **{world}** timer set to "
         f"**{format_time(seconds)}** remaining.\n\n"
         f"⏱️ This only changes the **current cycle**.\n"
         f"🔄 The next normal Finish will use the "
-        f"regular timer."
+        f"regular timer.",
+        ephemeral=True
     )
-
-
-# =========================================================
-# STATUS COMMAND
-# =========================================================
-
-@bot.command()
-async def status(ctx):
-
+@bot.tree.command(
+    name="status",
+    description="Show the current status of all farms."
+)
+async def status(
+    interaction: discord.Interaction
+):
     if not is_owner(
-        ctx.author.id
+        interaction.user.id
     ):
-
-        await ctx.send(
+        await interaction.response.send_message(
             "❌ **You don't have permission "
-            "to use this command.**"
+            "to use this command.**",
+            ephemeral=True
         )
-
         return
-
-    if not is_allowed_channel(
-        ctx.channel
+    if not is_allowed_farm_channel(
+        interaction.channel
     ):
-
-        await ctx.send(
+        await interaction.response.send_message(
             "❌ This command can only be "
-            "used in the configured farm channel."
+            "used in the configured farm channel.",
+            ephemeral=True
         )
-
         return
-
     embed = discord.Embed(
         title="🌾 Farm Status",
         color=discord.Color.blurple()
     )
-
     tackle_text = ""
-
     for world in TACKLE_WORLDS:
-
         tackle_text += (
-            f"🎯 `{world}` → "
+            f"{TACKLE_EMOJI} `{world}` → "
             f"{get_world_status(world)}\n"
         )
-
     embed.add_field(
-        name="🎯 Tackle — 48 Hours",
+        name=f"{TACKLE_EMOJI} Tackle — 48 Hours",
         value=tackle_text,
         inline=False
     )
-
     science_text = ""
-
     for world in SCIENCE_WORLDS:
-
         science_text += (
-            f"🔬 `{world}` → "
+            f"{SCIENCE_EMOJI} `{world}` → "
             f"{get_world_status(world)}\n"
         )
-
     embed.add_field(
-        name="🔬 Science Station — 12 Hours",
+        name=f"{SCIENCE_EMOJI} Science Station — 12 Hours",
         value=science_text,
         inline=False
     )
-
-    await ctx.send(
-        embed=embed
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
     )
-
-
-# =========================================================
-# BOT READY
-# =========================================================
-
+def normalize_world(world):
+    return world.strip().upper()
+def add_spam_world(
+    world,
+    user_id
+):
+    world = normalize_world(world)
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO spam_worlds
+        (
+            world,
+            end_time_2h,
+            end_time_6h,
+            added_by
+        )
+        VALUES (
+            ?,
+            NULL,
+            NULL,
+            ?
+        )
+    """, (
+        world,
+        user_id
+    ))
+    conn.commit()
+    conn.close()
+def remove_spam_world(world):
+    world = normalize_world(world)
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        DELETE FROM spam_worlds
+        WHERE world = ?
+    """, (
+        world,
+    ))
+    removed = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return removed
+def get_spam_world(world):
+    world = normalize_world(world)
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT *
+        FROM spam_worlds
+        WHERE world = ?
+    """, (
+        world,
+    ))
+    row = cursor.fetchone()
+    conn.close()
+    return row
+def get_all_spam_worlds():
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT *
+        FROM spam_worlds
+        ORDER BY world ASC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+def start_spam_timer(
+    world,
+    duration_hours
+):
+    world = normalize_world(world)
+    if duration_hours == 2:
+        end_time = (
+            time.time()
+            + TWO_HOURS
+        )
+    elif duration_hours == 6:
+        end_time = (
+            time.time()
+            + SIX_HOURS
+        )
+    else:
+        return
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    if duration_hours == 2:
+        cursor.execute("""
+            UPDATE spam_worlds
+            SET end_time_2h = ?
+            WHERE world = ?
+        """, (
+            end_time,
+            world
+        ))
+    elif duration_hours == 6:
+        cursor.execute("""
+            UPDATE spam_worlds
+            SET end_time_6h = ?
+            WHERE world = ?
+        """, (
+            end_time,
+            world
+        ))
+    conn.commit()
+    conn.close()
+def clear_spam_timer(
+    world,
+    duration_hours
+):
+    world = normalize_world(world)
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    if duration_hours == 2:
+        cursor.execute("""
+            UPDATE spam_worlds
+            SET end_time_2h = NULL
+            WHERE world = ?
+        """, (
+            world,
+        ))
+    elif duration_hours == 6:
+        cursor.execute("""
+            UPDATE spam_worlds
+            SET end_time_6h = NULL
+            WHERE world = ?
+        """, (
+            world,
+        ))
+    conn.commit()
+    conn.close()
+def reset_all_spam_timers():
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE spam_worlds
+        SET
+            end_time_2h = NULL,
+            end_time_6h = NULL
+    """)
+    conn.commit()
+    conn.close()
+def get_spam_panel():
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT *
+        FROM spam_panel
+        WHERE id = 1
+    """)
+    row = cursor.fetchone()
+    conn.close()
+    return row
+def save_spam_panel(
+    owner_id,
+    message_id
+):
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE spam_panel
+        SET
+            owner_id = ?,
+            panel_message_id = ?
+        WHERE id = 1
+    """, (
+        owner_id,
+        message_id
+    ))
+    conn.commit()
+    conn.close()
+def clear_spam_panel_message():
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE spam_panel
+        SET panel_message_id = NULL
+        WHERE id = 1
+    """)
+    conn.commit()
+    conn.close()
+def is_allowed_spam_channel(channel):
+    if channel is None:
+        return False
+    return channel.id == SPAM_CHANNEL_ID
+def spam_embed():
+    embed = discord.Embed(
+        title="📢 SPAM TIMER",
+        description=(
+            "Select a world below to manage its timers.\n\n"
+            "🌎 **World Owner**\n"
+            "The user who added the world controls its timers.\n\n"
+            "⏱️ **Independent Timers**\n"
+            "The 2-hour and 6-hour timers can run "
+            "at the same time."
+        ),
+        color=discord.Color.blurple()
+    )
+    worlds = get_all_spam_worlds()
+    if not worlds:
+        embed.add_field(
+            name="🌎 WORLDS",
+            value="No worlds have been added yet.",
+            inline=False
+        )
+        embed.set_footer(
+            text="Use /spamadd to add a world"
+        )
+        return embed
+    now = time.time()
+    ready_lines = []
+    running_lines = []
+    for row in worlds:
+        world = row["world"]
+        owner = f"<@{row['added_by']}>"
+        end_2h = row["end_time_2h"]
+        if end_2h is not None:
+            remaining_2h = (
+                end_2h - now
+            )
+            if remaining_2h > 0:
+                running_lines.append(
+                    f"⏱️ **{world}** — "
+                    f"2H: **{format_time(remaining_2h)}** — "
+                    f"{owner}"
+                )
+            else:
+                ready_lines.append(
+                    f"🟢 **{world}** — "
+                    f"2H READY — {owner}"
+                )
+        else:
+            ready_lines.append(
+                f"🟢 **{world}** — "
+                f"2H READY — {owner}"
+            )
+        end_6h = row["end_time_6h"]
+        if end_6h is not None:
+            remaining_6h = (
+                end_6h - now
+            )
+            if remaining_6h > 0:
+                running_lines.append(
+                    f"⏱️ **{world}** — "
+                    f"6H: **{format_time(remaining_6h)}** — "
+                    f"{owner}"
+                )
+            else:
+                ready_lines.append(
+                    f"🟢 **{world}** — "
+                    f"6H READY — {owner}"
+                )
+        else:
+            ready_lines.append(
+                f"🟢 **{world}** — "
+                f"6H READY — {owner}"
+            )
+    if ready_lines:
+        text = "\n".join(
+            ready_lines
+        )
+        if len(text) > 1024:
+            text = text[:1020] + "..."
+        embed.add_field(
+            name="🟢 READY",
+            value=text,
+            inline=False
+        )
+    if running_lines:
+        text = "\n".join(
+            running_lines
+        )
+        if len(text) > 1024:
+            text = text[:1020] + "..."
+        embed.add_field(
+            name="⏳ RUNNING",
+            value=text,
+            inline=False
+        )
+    embed.set_footer(
+        text="Use /spamadd to add a world"
+    )
+    return embed
+class TimerChoiceView(
+    discord.ui.View
+):
+    def __init__(
+        self,
+        world,
+        owner_id
+    ):
+        super().__init__(
+            timeout=300
+        )
+        self.world = world
+        self.owner_id = owner_id
+    async def interaction_check(
+        self,
+        interaction
+    ):
+        if interaction.channel_id != SPAM_CHANNEL_ID:
+            await interaction.response.send_message(
+                "❌ You cannot use this panel here.",
+                ephemeral=True
+            )
+            return False
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                (
+                    "❌ Only the person who added "
+                    "this world can start its timers."
+                ),
+                ephemeral=True
+            )
+            return False
+        return True
+    @discord.ui.button(
+        label="2 HOURS",
+        emoji="⏱️",
+        style=discord.ButtonStyle.success
+    )
+    async def two_hours(
+        self,
+        interaction,
+        button
+    ):
+        await start_spam_world_timer(
+            interaction,
+            self.world,
+            self.owner_id,
+            2
+        )
+    @discord.ui.button(
+        label="6 HOURS",
+        emoji="⏱️",
+        style=discord.ButtonStyle.primary
+    )
+    async def six_hours(
+        self,
+        interaction,
+        button
+    ):
+        await start_spam_world_timer(
+            interaction,
+            self.world,
+            self.owner_id,
+            6
+        )
+async def start_spam_world_timer(
+    interaction,
+    world,
+    owner_id,
+    duration_hours
+):
+    world = normalize_world(world)
+    try:
+        await interaction.response.defer(
+            ephemeral=True
+        )
+    except discord.InteractionResponded:
+        pass
+    row = get_spam_world(world)
+    if row is None:
+        await interaction.edit_original_response(
+            content="❌ This world no longer exists."
+        )
+        return
+    if row["added_by"] != interaction.user.id:
+        await interaction.edit_original_response(
+            content=(
+                "❌ Only the person who added "
+                "this world can start its timer."
+            )
+        )
+        return
+    if owner_id != interaction.user.id:
+        await interaction.edit_original_response(
+            content=(
+                "❌ You are not the owner "
+                "of this world."
+            )
+        )
+        return
+    if duration_hours == 2:
+        current_end = row["end_time_2h"]
+    else:
+        current_end = row["end_time_6h"]
+    if current_end is not None:
+        remaining = (
+            current_end
+            - time.time()
+        )
+        if remaining > 0:
+            await interaction.edit_original_response(
+                content=(
+                    f"⏳ **{world} — "
+                    f"{duration_hours} HOURS** "
+                    "is already running.\n\n"
+                    f"Time remaining: "
+                    f"**{format_time(remaining)}**\n\n"
+                    "You can still use the other timer."
+                )
+            )
+            return
+        clear_spam_timer(
+            world,
+            duration_hours
+        )
+    start_spam_timer(
+        world,
+        duration_hours
+    )
+    await interaction.edit_original_response(
+        content=(
+            f"✅ **{world}** started for "
+            f"**{duration_hours} hours**.\n\n"
+            "⏱️ This timer is running independently.\n"
+            "You can still start the other timer."
+        )
+    )
+    await update_spam_panel()
+class WorldSelect(
+    discord.ui.Select
+):
+    def __init__(self):
+        worlds = get_all_spam_worlds()
+        options = []
+        for row in worlds[:25]:
+            options.append(
+                discord.SelectOption(
+                    label=row["world"][:100],
+                    description=(
+                        f"Owner: User "
+                        f"{row['added_by']}"
+                    )[:100],
+                    value=row["world"]
+                )
+            )
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="No worlds available",
+                    description=(
+                        "Use /spamadd first."
+                    ),
+                    value="__none__"
+                )
+            )
+        super().__init__(
+            placeholder="🌎 Select a world...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="spam_world_select"
+        )
+    async def callback(
+        self,
+        interaction
+    ):
+        if interaction.channel_id != SPAM_CHANNEL_ID:
+            await interaction.response.send_message(
+                "❌ You cannot use this panel here.",
+                ephemeral=True
+            )
+            return
+        await interaction.response.defer(
+            ephemeral=True
+        )
+        world = normalize_world(
+            self.values[0]
+        )
+        if world == "__NONE__":
+            await interaction.edit_original_response(
+                content=(
+                    "❌ No worlds have been added yet."
+                )
+            )
+            return
+        row = get_spam_world(world)
+        if row is None:
+            await interaction.edit_original_response(
+                content=(
+                    "❌ This world no longer exists."
+                )
+            )
+            return
+        owner_id = row["added_by"]
+        if interaction.user.id == owner_id:
+            content = (
+                f"🌎 **{world}**\n\n"
+                "Choose a timer.\n\n"
+                "⏱️ **2 HOURS** and **6 HOURS** "
+                "are independent.\n\n"
+                "You can run both at the same time."
+            )
+        else:
+            content = (
+                f"🌎 **{world}**\n\n"
+                f"👤 Owner: <@{owner_id}>\n\n"
+                "You can view the timer options, "
+                "but only the owner can start them."
+            )
+        await interaction.edit_original_response(
+            content=content,
+            view=TimerChoiceView(
+                world,
+                owner_id
+            )
+        )
+class SpamView(
+    discord.ui.View
+):
+    def __init__(self):
+        super().__init__(
+            timeout=None
+        )
+        self.add_item(
+            WorldSelect()
+        )
+async def update_spam_panel():
+    panel = get_spam_panel()
+    if panel is None:
+        return
+    message_id = panel[
+        "panel_message_id"
+    ]
+    if not message_id:
+        return
+    channel = bot.get_channel(
+        SPAM_CHANNEL_ID
+    )
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(
+                SPAM_CHANNEL_ID
+            )
+        except Exception as e:
+            print(
+                f"❌ Error fetching Spam channel: {e}"
+            )
+            return
+    try:
+        message = await channel.fetch_message(
+            message_id
+        )
+    except discord.NotFound:
+        clear_spam_panel_message()
+        return
+    except Exception as e:
+        print(
+            f"❌ Error fetching Spam panel: {e}"
+        )
+        return
+    try:
+        await message.edit(
+            embed=spam_embed(),
+            view=SpamView()
+        )
+    except Exception as e:
+        print(
+            f"❌ Error updating Spam panel: {e}"
+        )
+@bot.tree.command(
+    name="spamsetup",
+    description="Create or update the Spam Timer panel"
+)
+async def spamsetup(
+    interaction: discord.Interaction
+):
+    if interaction.user.id not in OWNER_USER_IDS:
+        await interaction.response.send_message(
+            "❌ You are not allowed to use this command.",
+            ephemeral=True
+        )
+        return
+    if not is_allowed_spam_channel(
+        interaction.channel
+    ):
+        await interaction.response.send_message(
+            "❌ Use `/spamsetup` in the configured Spam channel.",
+            ephemeral=True
+        )
+        return
+    await interaction.response.defer(
+        ephemeral=True
+    )
+    panel = get_spam_panel()
+    message_id = panel[
+        "panel_message_id"
+    ]
+    if message_id:
+        try:
+            message = await interaction.channel.fetch_message(
+                message_id
+            )
+            await message.edit(
+                embed=spam_embed(),
+                view=SpamView()
+            )
+            await interaction.edit_original_response(
+                content="✅ Existing Spam panel updated."
+            )
+            return
+        except discord.NotFound:
+            clear_spam_panel_message()
+        except Exception as e:
+            print(
+                f"❌ Panel error: {e}"
+            )
+    message = await interaction.channel.send(
+        embed=spam_embed(),
+        view=SpamView()
+    )
+    save_spam_panel(
+        interaction.user.id,
+        message.id
+    )
+    await interaction.edit_original_response(
+        content="✅ Spam panel created."
+    )
+@bot.tree.command(
+    name="spamadd",
+    description="Add a Spam world"
+)
+@app_commands.describe(
+    world="The world name to add"
+)
+async def spamadd(
+    interaction: discord.Interaction,
+    world: str
+):
+    if not is_allowed_spam_channel(
+        interaction.channel
+    ):
+        await interaction.response.send_message(
+            "❌ Use `/spamadd` in the configured Spam channel.",
+            ephemeral=True
+        )
+        return
+    world = normalize_world(world)
+    if len(world) > 100:
+        await interaction.response.send_message(
+            "❌ World name is too long.",
+            ephemeral=True
+        )
+        return
+    existing = get_spam_world(world)
+    if existing:
+        if existing["added_by"] == interaction.user.id:
+            await interaction.response.send_message(
+                f"❌ You already added **{world}**.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ **{world}** was already added by another user.",
+                ephemeral=True
+            )
+        return
+    add_spam_world(
+        world,
+        interaction.user.id
+    )
+    await interaction.response.send_message(
+        f"✅ **{world}** has been added.\n"
+        f"👤 Owner: {interaction.user.mention}\n\n"
+        "You can now use both the 2-hour and 6-hour timers.",
+        ephemeral=True
+    )
+    await update_spam_panel()
+@bot.tree.command(
+    name="spamremove",
+    description="Remove a Spam world"
+)
+@app_commands.describe(
+    world="The world to remove"
+)
+async def spamremove(
+    interaction: discord.Interaction,
+    world: str
+):
+    if interaction.user.id not in OWNER_USER_IDS:
+        await interaction.response.send_message(
+            "❌ Only the bot owner can remove worlds.",
+            ephemeral=True
+        )
+        return
+    if not is_allowed_spam_channel(
+        interaction.channel
+    ):
+        await interaction.response.send_message(
+            "❌ Use `/spamremove` in the configured Spam channel.",
+            ephemeral=True
+        )
+        return
+    world = normalize_world(world)
+    if not remove_spam_world(world):
+        await interaction.response.send_message(
+            f"❌ **{world}** does not exist.",
+            ephemeral=True
+        )
+        return
+    await interaction.response.send_message(
+        f"✅ **{world}** has been removed.",
+        ephemeral=True
+    )
+    await update_spam_panel()
+@bot.tree.command(
+    name="spamreset",
+    description="Reset a world's timers"
+)
+@app_commands.describe(
+    world="World name, or 'all' for every world"
+)
+async def spamreset(
+    interaction: discord.Interaction,
+    world: str
+):
+    if not is_allowed_spam_channel(
+        interaction.channel
+    ):
+        await interaction.response.send_message(
+            "❌ Use `/spamreset` in the configured Spam channel.",
+            ephemeral=True
+        )
+        return
+    world = normalize_world(world)
+    if world == "ALL":
+        if interaction.user.id not in OWNER_USER_IDS:
+            await interaction.response.send_message(
+                "❌ Only the bot owner can reset all worlds.",
+                ephemeral=True
+            )
+            return
+        reset_all_spam_timers()
+        await interaction.response.send_message(
+            "✅ Both timers for all worlds have been reset.",
+            ephemeral=True
+        )
+        await update_spam_panel()
+        return
+    row = get_spam_world(world)
+    if row is None:
+        await interaction.response.send_message(
+            f"❌ **{world}** does not exist.",
+            ephemeral=True
+        )
+        return
+    world_owner_id = row["added_by"]
+    if interaction.user.id in OWNER_USER_IDS:
+        allowed = True
+    elif interaction.user.id == world_owner_id:
+        allowed = True
+    else:
+        allowed = False
+    if not allowed:
+        await interaction.response.send_message(
+            "❌ You can only reset a world that you added.",
+            ephemeral=True
+        )
+        return
+    clear_spam_timer(
+        world,
+        2
+    )
+    clear_spam_timer(
+        world,
+        6
+    )
+    await interaction.response.send_message(
+        f"✅ Both timers for **{world}** have been reset.",
+        ephemeral=True
+    )
+    await update_spam_panel()
+@bot.tree.command(
+    name="spamstatus",
+    description="Show Spam Timer status"
+)
+async def spamstatus(
+    interaction: discord.Interaction
+):
+    if interaction.user.id not in OWNER_USER_IDS:
+        await interaction.response.send_message(
+            "❌ Only the bot owner can use this command.",
+            ephemeral=True
+        )
+        return
+    if not is_allowed_spam_channel(
+        interaction.channel
+    ):
+        await interaction.response.send_message(
+            "❌ Use `/spamstatus` in the configured Spam channel.",
+            ephemeral=True
+        )
+        return
+    worlds = get_all_spam_worlds()
+    now = time.time()
+    total = len(worlds)
+    running_2h = 0
+    running_6h = 0
+    lines = []
+    for row in worlds:
+        world = row["world"]
+        end_2h = row["end_time_2h"]
+        if end_2h is not None:
+            remaining_2h = (
+                end_2h - now
+            )
+            if remaining_2h > 0:
+                running_2h += 1
+                lines.append(
+                    f"⏱️ **{world}** — "
+                    f"2H: {format_time(remaining_2h)}"
+                )
+        end_6h = row["end_time_6h"]
+        if end_6h is not None:
+            remaining_6h = (
+                end_6h - now
+            )
+            if remaining_6h > 0:
+                running_6h += 1
+                lines.append(
+                    f"⏱️ **{world}** — "
+                    f"6H: {format_time(remaining_6h)}"
+                )
+    embed = discord.Embed(
+        title="📊 SPAM STATUS",
+        color=discord.Color.blurple()
+    )
+    embed.add_field(
+        name="🌎 Worlds",
+        value=str(total),
+        inline=True
+    )
+    embed.add_field(
+        name="⏱️ 2H Running",
+        value=str(running_2h),
+        inline=True
+    )
+    embed.add_field(
+        name="⏱️ 6H Running",
+        value=str(running_6h),
+        inline=True
+    )
+    if lines:
+        text = "\n".join(lines)
+        if len(text) > 1024:
+            text = text[:1020] + "..."
+        embed.add_field(
+            name="Currently Running",
+            value=text,
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="Currently Running",
+            value="No timers are running.",
+            inline=False
+        )
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
+@bot.tree.command(
+    name="spamlist",
+    description="List all Spam worlds and timers"
+)
+async def spamlist(
+    interaction: discord.Interaction
+):
+    if not is_allowed_spam_channel(
+        interaction.channel
+    ):
+        await interaction.response.send_message(
+            "❌ Use `/spamlist` in the configured Spam channel.",
+            ephemeral=True
+        )
+        return
+    worlds = get_all_spam_worlds()
+    if not worlds:
+        await interaction.response.send_message(
+            "🌎 No worlds have been added.",
+            ephemeral=True
+        )
+        return
+    now = time.time()
+    lines = []
+    for row in worlds:
+        world = row["world"]
+        owner = f"<@{row['added_by']}>"
+        end_2h = row["end_time_2h"]
+        if end_2h is None:
+            timer_2h = "🟢 READY"
+        else:
+            remaining = (
+                end_2h - now
+            )
+            if remaining <= 0:
+                timer_2h = "🟢 READY"
+            else:
+                timer_2h = (
+                    f"⏳ {format_time(remaining)}"
+                )
+        end_6h = row["end_time_6h"]
+        if end_6h is None:
+            timer_6h = "🟢 READY"
+        else:
+            remaining = (
+                end_6h - now
+            )
+            if remaining <= 0:
+                timer_6h = "🟢 READY"
+            else:
+                timer_6h = (
+                    f"⏳ {format_time(remaining)}"
+                )
+        lines.append(
+            f"**{world}** — {owner}\n"
+            f"  ⏱️ 2H: {timer_2h}\n"
+            f"  ⏱️ 6H: {timer_6h}"
+        )
+    description = "\n\n".join(lines)
+    if len(description) > 4096:
+        description = (
+            description[:4090]
+            + "..."
+        )
+    embed = discord.Embed(
+        title="🌎 SPAM WORLDS",
+        description=description,
+        color=discord.Color.blurple()
+    )
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True
+    )
+@tasks.loop(seconds=10)
+async def spam_timer_loop():
+    try:
+        worlds = get_all_spam_worlds()
+        now = time.time()
+        expired = []
+        for row in worlds:
+            world = row["world"]
+            owner_id = row["added_by"]
+            end_2h = row["end_time_2h"]
+            if (
+                end_2h is not None
+                and
+                end_2h <= now
+            ):
+                expired.append(
+                    (
+                        world,
+                        owner_id,
+                        2
+                    )
+                )
+            end_6h = row["end_time_6h"]
+            if (
+                end_6h is not None
+                and
+                end_6h <= now
+            ):
+                expired.append(
+                    (
+                        world,
+                        owner_id,
+                        6
+                    )
+                )
+        for (
+            world,
+            owner_id,
+            duration
+        ) in expired:
+            clear_spam_timer(
+                world,
+                duration
+            )
+            channel = bot.get_channel(
+                SPAM_CHANNEL_ID
+            )
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(
+                        SPAM_CHANNEL_ID
+                    )
+                except Exception as e:
+                    print(
+                        f"❌ Could not fetch Spam channel: {e}"
+                    )
+                    continue
+            try:
+                await channel.send(
+                    f"🔔 <@{owner_id}> "
+                    f"**{world}** — "
+                    f"**{duration} HOURS** "
+                    "timer is ready!"
+                )
+            except Exception as e:
+                print(
+                    f"❌ Error sending Spam ready ping: {e}"
+                )
+        if expired:
+            await update_spam_panel()
+    except Exception as e:
+        print(
+            f"❌ Spam timer loop error: {e}"
+        )
+@spam_timer_loop.before_loop
+async def before_spam_timer_loop():
+    await bot.wait_until_ready()
 @bot.event
 async def on_ready():
-
     print(
-        "-----------------------------------"
+        "==================================="
     )
-
     print(
         f"✅ Logged in as {bot.user}"
     )
-
     print(
         f"🆔 Bot ID: {bot.user.id}"
     )
-
     print(
-        "-----------------------------------"
+        "==================================="
     )
-
-    # -----------------------------------------------------
-    # DATABASE
-    # -----------------------------------------------------
-
-    initialize_database()
-
-    # -----------------------------------------------------
-    # REGISTER PERSISTENT VIEWS
-    # -----------------------------------------------------
-
+    initialize_farm_database()
+    initialize_spam_database()
     if not hasattr(
         bot,
         "_farm_views_registered"
     ):
-
         bot.add_view(
             TackleView()
         )
-
         bot.add_view(
             ScienceView()
         )
-
-        bot.add_view(
-            DismissPingView()
-        )
-
         bot._farm_views_registered = True
-
         print(
             "✅ Persistent farm buttons registered."
         )
-
-    # -----------------------------------------------------
-    # CHECK EXPIRED TIMERS
-    # -----------------------------------------------------
-
-    await check_expired_timers()
-
-    # -----------------------------------------------------
-    # UPDATE ONLY TWO FARM PANELS
-    # -----------------------------------------------------
-
-    await update_panels()
-
-    # -----------------------------------------------------
-    # START TIMER LOOP
-    # -----------------------------------------------------
-
+    if not hasattr(
+        bot,
+        "_spam_view_registered"
+    ):
+        bot.add_view(
+            SpamView()
+        )
+        bot._spam_view_registered = True
+        print(
+            "✅ Persistent Spam panel registered."
+        )
+    try:
+        synced = await bot.tree.sync()
+        print(
+            f"✅ Synced {len(synced)} slash commands."
+        )
+    except Exception as e:
+        print(
+            f"❌ Slash command sync error: {e}"
+        )
+    await check_expired_farm_timers()
+    await update_farm_panels()
+    await update_spam_panel()
     if not timer_loop.is_running():
-
         timer_loop.start()
-
+        print(
+            "✅ Farm timer loop started."
+        )
+    if not spam_timer_loop.is_running():
+        spam_timer_loop.start()
+        print(
+            "✅ Spam timer loop started."
+        )
     print(
         "🌾 Farm system is running!"
     )
-
     print(
         "🎯 Tackle: 3 worlds / 48 hours"
     )
-
     print(
         "🔬 Science: 2 worlds / 12 hours"
     )
-
     print(
-        "🔔 Only ONE active harvest ping"
+        "🔔 Farm: ONE active harvest ping"
     )
-
     print(
-        "-----------------------------------"
+        "📢 Spam system is running!"
     )
-
-
-# =========================================================
-# ERROR HANDLER
-# =========================================================
-
-@bot.event
-async def on_command_error(
-    ctx,
-    error
-):
-
-    if isinstance(
-        error,
-        commands.CommandNotFound
-    ):
-
-        return
-
-    if isinstance(
-        error,
-        commands.MissingRequiredArgument
-    ):
-
-        await ctx.send(
-            "❌ You are missing "
-            "a required argument."
-        )
-
-        return
-
-    if isinstance(
-        error,
-        commands.BadArgument
-    ):
-
-        await ctx.send(
-            "❌ Invalid command format.\n\n"
-            "Example:\n"
-            "`!settime RGREG 1`"
-        )
-
-        return
-
     print(
-        f"Command error: {error}"
+        "⏱️ Spam: independent 2H / 6H timers"
     )
-
-
+    print(
+        "==================================="
+    )
 # =========================================================
 # RUN
 # =========================================================
-
 if __name__ == "__main__":
-
     keep_alive()
-
     bot.run(
         os.getenv("TOKEN")
     )
