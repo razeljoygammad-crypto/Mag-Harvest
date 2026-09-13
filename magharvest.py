@@ -58,8 +58,9 @@ ALL_FARM_WORLDS = (
 )
 SPAM_CHANNEL_ID = 1548670456385765426
 SPAM_DATABASE_FILE = "spam_bot.db"
-TWO_HOURS = 2 * 60 * 60
+TWO_HOURS = 2 * 60 * 60 + 10 * 60  # 2 hours 10 minutes
 SIX_HOURS = 6 * 60 * 60
+SPAM_SHORT_LABEL = "2H 10M"
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(
@@ -360,6 +361,17 @@ def initialize_spam_database():
             NULL,
             NULL
         )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS spam_active_ping (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            message_id INTEGER
+        )
+    """)
+    cursor.execute("""
+        INSERT OR IGNORE INTO spam_active_ping
+        (id, message_id)
+        VALUES (1, NULL)
     """)
     conn.commit()
     conn.close()
@@ -1166,6 +1178,74 @@ def reset_all_spam_timers():
     """)
     conn.commit()
     conn.close()
+def get_spam_active_ping_id():
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT message_id
+        FROM spam_active_ping
+        WHERE id = 1
+    """)
+    row = cursor.fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return row[0]
+
+def set_spam_active_ping_id(message_id):
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE spam_active_ping
+        SET message_id = ?
+        WHERE id = 1
+    """, (message_id,))
+    conn.commit()
+    conn.close()
+
+def clear_spam_active_ping_id():
+    conn = get_spam_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE spam_active_ping
+        SET message_id = NULL
+        WHERE id = 1
+    """)
+    conn.commit()
+    conn.close()
+
+async def delete_old_spam_ping(channel):
+    old_message_id = get_spam_active_ping_id()
+    if not old_message_id:
+        return
+    try:
+        old_message = await channel.fetch_message(old_message_id)
+        await old_message.delete()
+        print(f"🗑️ Deleted previous Spam ready ping ({old_message_id})")
+    except discord.NotFound:
+        print("ℹ️ Previous Spam ready ping was already deleted.")
+    except discord.Forbidden:
+        print("❌ Bot does not have permission to delete the previous Spam ping.")
+    except Exception as e:
+        print(f"❌ Error deleting old Spam ping: {e}")
+    finally:
+        clear_spam_active_ping_id()
+
+async def send_spam_ready_ping(channel, world, owner_id, duration):
+    await delete_old_spam_ping(channel)
+    label = SPAM_SHORT_LABEL if duration == 2 else "6 HOURS"
+    try:
+        message = await channel.send(
+            f"🔔 <@{owner_id}> "
+            f"**{world}** — "
+            f"**{label}** timer is ready!"
+        )
+        set_spam_active_ping_id(message.id)
+        print(f"🔔 New Spam ready ping sent for {world} ({label})")
+        print(f"🆔 Spam ping message ID: {message.id}")
+    except Exception as e:
+        print(f"❌ Error sending Spam ready ping: {e}")
+
 def get_spam_panel():
     conn = get_spam_db()
     cursor = conn.cursor()
@@ -1209,6 +1289,14 @@ def is_allowed_spam_channel(channel):
     if channel is None:
         return False
     return channel.id == SPAM_CHANNEL_ID
+def format_spam_countdown(end_time):
+    if end_time is None:
+        return "🟢 **READY**"
+    remaining = end_time - time.time()
+    if remaining <= 0:
+        return "🟢 **READY**"
+    # Exactly the same countdown style used by the Farm/Tackle system.
+    return f"⏳ `{format_time(remaining)}`"
 def spam_embed():
     embed = discord.Embed(
         title="📢 SPAM TIMER",
@@ -1217,11 +1305,12 @@ def spam_embed():
             "🌎 **World Owner**\n"
             "The user who added the world controls its timers.\n\n"
             "⏱️ **Independent Timers**\n"
-            "The 2-hour and 6-hour timers can run "
+            "The 2H 10M and 6-hour timers can run "
             "at the same time."
         ),
         color=discord.Color.blurple()
     )
+
     worlds = get_all_spam_worlds()
     if not worlds:
         embed.add_field(
@@ -1233,80 +1322,27 @@ def spam_embed():
             text="Use /spamadd to add a world"
         )
         return embed
-    now = time.time()
-    ready_lines = []
-    running_lines = []
+
+    description = ""
     for row in worlds:
         world = row["world"]
         owner = f"<@{row['added_by']}>"
-        end_2h = row["end_time_2h"]
-        if end_2h is not None:
-            remaining_2h = (
-                end_2h - now
-            )
-            if remaining_2h > 0:
-                running_lines.append(
-                    f"⏱️ **{world}** — "
-                    f"2H: **{format_time(remaining_2h)}** — "
-                    f"{owner}"
-                )
-            else:
-                ready_lines.append(
-                    f"🟢 **{world}** — "
-                    f"2H READY — {owner}"
-                )
-        else:
-            ready_lines.append(
-                f"🟢 **{world}** — "
-                f"2H READY — {owner}"
-            )
-        end_6h = row["end_time_6h"]
-        if end_6h is not None:
-            remaining_6h = (
-                end_6h - now
-            )
-            if remaining_6h > 0:
-                running_lines.append(
-                    f"⏱️ **{world}** — "
-                    f"6H: **{format_time(remaining_6h)}** — "
-                    f"{owner}"
-                )
-            else:
-                ready_lines.append(
-                    f"🟢 **{world}** — "
-                    f"6H READY — {owner}"
-                )
-        else:
-            ready_lines.append(
-                f"🟢 **{world}** — "
-                f"6H READY — {owner}"
-            )
-    if ready_lines:
-        text = "\n".join(
-            ready_lines
+        description += (
+            f"🌎 **{world}** — {owner}\n"
+            f"⏱️ **2H 10M** → {format_spam_countdown(row['end_time_2h'])}\n"
+            f"⏱️ **6H** → {format_spam_countdown(row['end_time_6h'])}\n\n"
         )
-        if len(text) > 1024:
-            text = text[:1020] + "..."
-        embed.add_field(
-            name="🟢 READY",
-            value=text,
-            inline=False
-        )
-    if running_lines:
-        text = "\n".join(
-            running_lines
-        )
-        if len(text) > 1024:
-            text = text[:1020] + "..."
-        embed.add_field(
-            name="⏳ RUNNING",
-            value=text,
-            inline=False
-        )
+
+    description = description.rstrip()
+    if len(description) > 4096:
+        description = description[:4090] + "..."
+
+    embed.description = description
     embed.set_footer(
         text="Use /spamadd to add a world"
     )
     return embed
+
 class TimerChoiceView(
     discord.ui.View
 ):
@@ -1341,7 +1377,7 @@ class TimerChoiceView(
             return False
         return True
     @discord.ui.button(
-        label="2 HOURS",
+        label="2H 10M",
         emoji="⏱️",
         style=discord.ButtonStyle.success
     )
@@ -1420,7 +1456,7 @@ async def start_spam_world_timer(
             await interaction.edit_original_response(
                 content=(
                     f"⏳ **{world} — "
-                    f"{duration_hours} HOURS** "
+                    f"{SPAM_SHORT_LABEL if duration_hours == 2 else '6 HOURS'}** "
                     "is already running.\n\n"
                     f"Time remaining: "
                     f"**{format_time(remaining)}**\n\n"
@@ -1439,7 +1475,7 @@ async def start_spam_world_timer(
     await interaction.edit_original_response(
         content=(
             f"✅ **{world}** started for "
-            f"**{duration_hours} hours**.\n\n"
+            f"**{SPAM_SHORT_LABEL if duration_hours == 2 else '6 hours'}**.\n\n"
             "⏱️ This timer is running independently.\n"
             "You can still start the other timer."
         )
@@ -1515,7 +1551,7 @@ class WorldSelect(
             content = (
                 f"🌎 **{world}**\n\n"
                 "Choose a timer.\n\n"
-                "⏱️ **2 HOURS** and **6 HOURS** "
+                f"⏱️ **{SPAM_SHORT_LABEL}** and **6 HOURS** "
                 "are independent.\n\n"
                 "You can run both at the same time."
             )
@@ -1690,7 +1726,7 @@ async def spamadd(
     await interaction.response.send_message(
         f"✅ **{world}** has been added.\n"
         f"👤 Owner: {interaction.user.mention}\n\n"
-        "You can now use both the 2-hour and 6-hour timers.",
+        "You can now use both the 2H 10M and 6-hour timers.",
         ephemeral=True
     )
     await update_spam_panel()
@@ -1836,7 +1872,7 @@ async def spamstatus(
                 running_2h += 1
                 lines.append(
                     f"⏱️ **{world}** — "
-                    f"2H: {format_time(remaining_2h)}"
+                    f"{SPAM_SHORT_LABEL}: {format_time(remaining_2h)}"
                 )
         end_6h = row["end_time_6h"]
         if end_6h is not None:
@@ -1859,7 +1895,7 @@ async def spamstatus(
         inline=True
     )
     embed.add_field(
-        name="⏱️ 2H Running",
+        name=f"⏱️ {SPAM_SHORT_LABEL} Running",
         value=str(running_2h),
         inline=True
     )
@@ -1915,34 +1951,13 @@ async def spamlist(
         world = row["world"]
         owner = f"<@{row['added_by']}>"
         end_2h = row["end_time_2h"]
-        if end_2h is None:
-            timer_2h = "🟢 READY"
-        else:
-            remaining = (
-                end_2h - now
-            )
-            if remaining <= 0:
-                timer_2h = "🟢 READY"
-            else:
-                timer_2h = (
-                    f"⏳ {format_time(remaining)}"
-                )
+        timer_2h = format_spam_countdown(end_2h)
+
         end_6h = row["end_time_6h"]
-        if end_6h is None:
-            timer_6h = "🟢 READY"
-        else:
-            remaining = (
-                end_6h - now
-            )
-            if remaining <= 0:
-                timer_6h = "🟢 READY"
-            else:
-                timer_6h = (
-                    f"⏳ {format_time(remaining)}"
-                )
+        timer_6h = format_spam_countdown(end_6h)
         lines.append(
             f"**{world}** — {owner}\n"
-            f"  ⏱️ 2H: {timer_2h}\n"
+            f"  ⏱️ {SPAM_SHORT_LABEL}: {timer_2h}\n"
             f"  ⏱️ 6H: {timer_6h}"
         )
     description = "\n\n".join(lines)
@@ -2017,19 +2032,15 @@ async def spam_timer_loop():
                         f"❌ Could not fetch Spam channel: {e}"
                     )
                     continue
-            try:
-                await channel.send(
-                    f"🔔 <@{owner_id}> "
-                    f"**{world}** — "
-                    f"**{duration} HOURS** "
-                    "timer is ready!"
-                )
-            except Exception as e:
-                print(
-                    f"❌ Error sending Spam ready ping: {e}"
-                )
-        if expired:
-            await update_spam_panel()
+            await send_spam_ready_ping(
+                channel,
+                world,
+                owner_id,
+                duration
+            )
+        # Keep the Spam panel countdown updated even when no timer expires.
+        # This makes the displayed countdown decrease every loop (10 seconds).
+        await update_spam_panel()
     except Exception as e:
         print(
             f"❌ Spam timer loop error: {e}"
@@ -2116,7 +2127,7 @@ async def on_ready():
         "📢 Spam system is running!"
     )
     print(
-        "⏱️ Spam: independent 2H / 6H timers"
+        "⏱️ Spam: independent 2H 10M / 6H timers"
     )
     print(
         "==================================="
