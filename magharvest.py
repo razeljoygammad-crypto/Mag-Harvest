@@ -839,8 +839,6 @@ async def check_expired_farm_timers():
             channel,
             world
         )
-    if expired_worlds:
-        await update_farm_panels()
 @tasks.loop(seconds=10)
 async def timer_loop():
     try:
