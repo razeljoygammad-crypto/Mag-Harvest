@@ -1922,6 +1922,86 @@ async def spamstatus(
         ephemeral=True
     )
 @bot.tree.command(
+    name="spamtimer",
+    description="Set the current timer for a Spam world."
+)
+@app_commands.describe(
+    world="The Spam world",
+    hours="How many hours the current timer should have"
+)
+async def spamtimer(
+    interaction: discord.Interaction,
+    world: str,
+    hours: float
+):
+    if interaction.user.id not in OWNER_USER_IDS:
+        await interaction.response.send_message(
+            "❌ You don't have permission to use this command.",
+            ephemeral=True
+        )
+        return
+
+    if not is_allowed_spam_channel(
+        interaction.channel
+    ):
+        await interaction.response.send_message(
+            "❌ This command can only be used in the configured Spam channel.",
+            ephemeral=True
+        )
+        return
+
+    world = normalize_world(world)
+
+    if hours <= 0:
+        await interaction.response.send_message(
+            "❌ The number of hours must be greater than 0.",
+            ephemeral=True
+        )
+        return
+
+    row = get_spam_world(world)
+
+    if row is None:
+        await interaction.response.send_message(
+            f"❌ **{world}** does not exist.",
+            ephemeral=True
+        )
+        return
+
+    seconds = int(hours * 60 * 60)
+    end_time = time.time() + seconds
+
+    conn = sqlite3.connect(
+        SPAM_DATABASE_FILE
+    )
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE spam_worlds
+        SET end_time_2h = ?,
+            end_time_6h = NULL
+        WHERE world = ?
+        """,
+        (
+            end_time,
+            world
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    await update_spam_panel()
+
+    await interaction.response.send_message(
+        f"✅ **{world}** timer set to **{format_time(seconds)}**.\n\n"
+        f"⏱️ This only changes the **current cycle**.",
+        ephemeral=True
+    )
+
+@bot.tree.command(
     name="spamlist",
     description="List all Spam worlds and timers"
 )
